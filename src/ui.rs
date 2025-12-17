@@ -4,8 +4,6 @@ use eframe::egui;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-const COPPER_COLOR: egui::Color32 = egui::Color32::from_rgb(212, 115, 49);
-
 pub struct CopperApp {
     state: Arc<Mutex<AppState>>,
     tx: Sender<PwCommand>,
@@ -70,7 +68,7 @@ impl eframe::App for CopperApp {
             sources.sort_by_key(|n| n.id);
 
             if !sinks.is_empty() {
-                ui.label(egui::RichText::new("Outputs").strong().color(COPPER_COLOR));
+                ui.label(egui::RichText::new("Outputs").strong());
                 for node in sinks {
                     self.render_node(ui, node);
                 }
@@ -78,7 +76,7 @@ impl eframe::App for CopperApp {
             }
 
             if !sources.is_empty() {
-                ui.label(egui::RichText::new("Inputs").strong().color(COPPER_COLOR));
+                ui.label(egui::RichText::new("Inputs").strong());
                 for node in sources {
                     self.render_node(ui, node);
                 }
@@ -87,16 +85,4 @@ impl eframe::App for CopperApp {
     }
 }
 
-pub fn setup_custom_style(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.override_text_color = Some(egui::Color32::from_gray(240));
-    visuals.panel_fill = egui::Color32::from_rgb(20, 20, 25);
 
-    visuals.selection.bg_fill = COPPER_COLOR;
-    visuals.widgets.active.bg_fill = COPPER_COLOR;
-    visuals.widgets.open.bg_fill = COPPER_COLOR;
-    visuals.widgets.hovered.bg_fill = COPPER_COLOR;
-    visuals.widgets.hovered.weak_bg_fill = COPPER_COLOR;
-
-    ctx.set_visuals(visuals);
-}

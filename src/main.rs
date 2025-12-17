@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use state::{AppState, PwCommand};
-use ui::{setup_custom_style, CopperApp};
+use ui::CopperApp;
 
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
@@ -39,7 +39,6 @@ fn main() -> Result<(), eframe::Error> {
         options,
         Box::new(move |cc| {
             *repaint_ctx.lock() = Some(cc.egui_ctx.clone());
-            setup_custom_style(&cc.egui_ctx);
             Ok(Box::new(CopperApp::new(state, tx_cmd)))
         }),
     )
