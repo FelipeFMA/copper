@@ -172,6 +172,85 @@ fn setup_custom_style(ctx: &egui::Context) {
 
 // --- PipeWire Backend ---
 
+unsafe fn process_param_update(
+    pod: *const spa_sys::spa_pod,
+    id: u32,
+    state: &Arc<Mutex<AppState>>,
+    repaint: &Arc<Mutex<Option<egui::Context>>>
+) {
+    if (*pod).type_ != spa_sys::SPA_TYPE_Object {
+        return;
+    }
+
+    let obj = pod as *mut spa_sys::spa_pod_object;
+    let body = &(*obj).body;
+    let size = (*obj).pod.size;
+    
+    let mut iter = spa_sys::spa_pod_prop_first(body);
+    
+    let mut vol = None;
+    let mut muted = None;
+    let mut channels = None;
+
+    while spa_sys::spa_pod_prop_is_inside(body, size, iter) {
+        let key = (*iter).key;
+        let value_ptr = &mut (*iter).value as *mut spa_sys::spa_pod;
+        let type_ = (*value_ptr).type_;
+
+        match key {
+            65544 => { // Channel Volumes
+                if type_ == spa_sys::SPA_TYPE_Array {
+                    let array = value_ptr as *mut spa_sys::spa_pod_array;
+                    let body_ptr = &(*array).body;
+                    let child_type = (*body_ptr).child.type_;
+                    
+                    if child_type == spa_sys::SPA_TYPE_Float {
+                        let pod_size = (*array).pod.size;
+                        let body_size = std::mem::size_of::<spa_sys::spa_pod_array_body>() as u32;
+                        if pod_size > body_size {
+                            let count = (pod_size - body_size) / 4;
+                            channels = Some(count);
+                            
+                            let data_ptr = (body_ptr as *const _ as *const u8).add(body_size as usize);
+                            let f = *(data_ptr as *const f32);
+                            vol = Some(f);
+                        }
+                    }
+                }
+            },
+            65539 if vol.is_none() => { // Volume (fallback)
+                let mut f: f32 = 0.0;
+                if spa_sys::spa_pod_get_float(value_ptr, &mut f) >= 0 {
+                    vol = Some(f);
+                }
+            },
+            65540 => { // Mute
+                let mut b: bool = false;
+                if spa_sys::spa_pod_get_bool(value_ptr, &mut b) >= 0 {
+                    muted = Some(b);
+                }
+            },
+            _ => {}
+        }
+        
+        iter = spa_sys::spa_pod_prop_next(iter);
+    }
+
+    if vol.is_some() || muted.is_some() || channels.is_some() {
+        let mut s = state.lock();
+        if let Some(n) = s.nodes.get_mut(&id) {
+            if let Some(v) = vol { 
+                n.volume = v.cbrt(); 
+            }
+            if let Some(m) = muted { n.muted = m; }
+            if let Some(c) = channels { n.channel_count = c; }
+        }
+        if let Some(ctx) = repaint.lock().as_ref() {
+            ctx.request_repaint();
+        }
+    }
+}
+
 fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: Arc<Mutex<Option<egui::Context>>>) {
     pw::init();
 
@@ -182,143 +261,71 @@ fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: 
 
     let nodes: Rc<RefCell<HashMap<u32, NodeWrapper>>> = Rc::new(RefCell::new(HashMap::new()));
 
-    let nodes_clone = nodes.clone();
-    let state_clone = state.clone();
-    let repaint_clone = repaint_ctx.clone();
-
     let registry_clone = registry.clone();
-    let state_global = state_clone.clone();
-    let repaint_global = repaint_clone.clone();
-    let nodes_global = nodes_clone.clone();
+    let state_global = state.clone();
+    let repaint_global = repaint_ctx.clone();
+    let nodes_global = nodes.clone();
 
-    let state_remove = state_clone.clone();
-    let repaint_remove = repaint_clone.clone();
-    let nodes_remove = nodes_clone.clone();
+    let state_remove = state.clone();
+    let repaint_remove = repaint_ctx.clone();
+    let nodes_remove = nodes.clone();
 
     let _registry_listener = registry
         .add_listener_local()
         .global(move |global| {
-            if let Some(props) = global.props {
-                let media_class = props.get("media.class").unwrap_or("");
-                let is_sink = media_class == "Audio/Sink";
-                let is_source = media_class == "Audio/Source";
-
-                if is_sink || is_source {
-                    let id = global.id;
-                    let name = props.get("node.name").unwrap_or("Unknown").to_string();
-                    let description = props.get("node.description").unwrap_or(&name).to_string();
-
-                    {
-                        let mut s = state_global.lock();
-                        s.nodes.insert(id, AudioNode {
-                            id,
-                            name,
-                            description,
-                            volume: 1.0,
-                            muted: false,
-                            is_sink,
-                            channel_count: 0,
-                        });
-                    }
-                    if let Some(ctx) = repaint_global.lock().as_ref() {
-                        ctx.request_repaint();
-                    }
-
-                    let node: pw::node::Node = registry_clone.bind(global).expect("Failed to bind node");
-                    
-                    let s_clone = state_global.clone();
-                    let r_clone = repaint_global.clone();
-                    let id_clone = id;
-                    
-                    let listener = node
-                        .add_listener_local()
-                        .param(move |_seq, _id, _index, _next, param| {
-                            if let Some(param) = param {
-                                let pod = param.as_raw_ptr();
-                                unsafe {
-                                    if (*pod).type_ == spa_sys::SPA_TYPE_Object {
-                                        let obj = pod as *mut spa_sys::spa_pod_object;
-                                        let body = &(*obj).body;
-                                        let size = (*obj).pod.size;
-                                        
-                                        let mut iter = spa_sys::spa_pod_prop_first(body);
-                                        
-                                        let mut vol = None;
-                                        let mut muted = None;
-                                        let mut channels = None;
-
-                                        while spa_sys::spa_pod_prop_is_inside(body, size, iter) {
-                                            let key = (*iter).key;
-                                            let value_ptr = &mut (*iter).value as *mut spa_sys::spa_pod;
-                                            let type_ = (*value_ptr).type_;
-                                            
-                                            // SPA_PROP_volume = 0x10003 (65539)
-                                            // SPA_PROP_mute = 0x10004 (65540)
-                                            // SPA_PROP_channelVolumes = 0x10008 (65544)
-
-                                            if key == 65544 { // Channel Volumes
-                                                if type_ == spa_sys::SPA_TYPE_Array {
-                                                    let array = value_ptr as *mut spa_sys::spa_pod_array;
-                                                    let body_ptr = &(*array).body;
-                                                    let child_type = (*body_ptr).child.type_;
-                                                    
-                                                    if child_type == spa_sys::SPA_TYPE_Float {
-                                                        let pod_size = (*array).pod.size;
-                                                        let body_size = std::mem::size_of::<spa_sys::spa_pod_array_body>() as u32;
-                                                        if pod_size > body_size {
-                                                            let count = (pod_size - body_size) / 4;
-                                                            channels = Some(count);
-                                                            
-                                                            let data_ptr = (body_ptr as *const _ as *const u8).add(body_size as usize);
-                                                            let f = *(data_ptr as *const f32);
-                                                            vol = Some(f);
-                                                        }
-                                                    }
-                                                }
-                                            } else if key == 65539 && vol.is_none() { // Volume (fallback)
-                                                let mut f: f32 = 0.0;
-                                                if spa_sys::spa_pod_get_float(value_ptr, &mut f) >= 0 {
-                                                    vol = Some(f);
-                                                }
-                                            } else if key == 65540 { // Mute
-                                                let mut b: bool = false;
-                                                if spa_sys::spa_pod_get_bool(value_ptr, &mut b) >= 0 {
-                                                    muted = Some(b);
-                                                }
-                                            }
-                                            
-                                            iter = spa_sys::spa_pod_prop_next(iter);
-                                        }
-
-                                        if vol.is_some() || muted.is_some() || channels.is_some() {
-                                            let mut s = s_clone.lock();
-                                            if let Some(n) = s.nodes.get_mut(&id_clone) {
-                                                if let Some(v) = vol { 
-                                                    // Convert linear to cubic for UI
-                                                    n.volume = v.cbrt(); 
-                                                }
-                                                if let Some(m) = muted { n.muted = m; }
-                                                if let Some(c) = channels { n.channel_count = c; }
-                                            }
-                                            if let Some(ctx) = r_clone.lock().as_ref() {
-                                                ctx.request_repaint();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        })
-                        .register();
-
-                    // Subscribe to Props (id 2) and Route (id 4)
-                    node.subscribe_params(&[spa::param::ParamType::Props, spa::param::ParamType::Route]);
-
-                    nodes_global.borrow_mut().insert(id, NodeWrapper {
-                        _proxy: node,
-                        _listener: Box::new(listener),
-                    });
-                }
+            let Some(props) = global.props else { return };
+            let media_class = props.get("media.class").unwrap_or("");
+            
+            if media_class != "Audio/Sink" && media_class != "Audio/Source" {
+                return;
             }
+
+            let id = global.id;
+            let name = props.get("node.name").unwrap_or("Unknown").to_string();
+            let description = props.get("node.description").unwrap_or(&name).to_string();
+            let is_sink = media_class == "Audio/Sink";
+
+            {
+                let mut s = state_global.lock();
+                s.nodes.insert(id, AudioNode {
+                    id,
+                    name,
+                    description,
+                    volume: 1.0,
+                    muted: false,
+                    is_sink,
+                    channel_count: 0,
+                });
+            }
+            
+            if let Some(ctx) = repaint_global.lock().as_ref() {
+                ctx.request_repaint();
+            }
+
+            let node: pw::node::Node = registry_clone.bind(global).expect("Failed to bind node");
+            
+            let s_clone = state_global.clone();
+            let r_clone = repaint_global.clone();
+            let id_clone = id;
+            
+            let listener = node
+                .add_listener_local()
+                .param(move |_seq, _id, _index, _next, param| {
+                    if let Some(param) = param {
+                        unsafe {
+                            process_param_update(param.as_raw_ptr(), id_clone, &s_clone, &r_clone);
+                        }
+                    }
+                })
+                .register();
+
+            // Subscribe to Props (id 2) and Route (id 4)
+            node.subscribe_params(&[spa::param::ParamType::Props, spa::param::ParamType::Route]);
+
+            nodes_global.borrow_mut().insert(id, NodeWrapper {
+                _proxy: node,
+                _listener: Box::new(listener),
+            });
         })
         .global_remove(move |id| {
             nodes_remove.borrow_mut().remove(&id);
