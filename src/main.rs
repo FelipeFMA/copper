@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::mem::MaybeUninit;
 use std::time::Duration;
 
 // --- Data Structures ---
@@ -35,7 +34,7 @@ enum PwCommand {
 }
 
 struct NodeWrapper {
-    proxy: pw::node::Node,
+    _proxy: pw::node::Node,
     _listener: Box<dyn pw::proxy::Listener>,
 }
 
@@ -234,11 +233,9 @@ fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: 
                     let listener = node
                         .add_listener_local()
                         .param(move |_seq, _id, _index, _next, param| {
-                            println!("Param event for node {}, param_id: {:?}", id_clone, _id);
                             if let Some(param) = param {
                                 let pod = param.as_raw_ptr();
                                 unsafe {
-                                    println!("  Param Type: {}", (*pod).type_);
                                     if (*pod).type_ == spa_sys::SPA_TYPE_Object {
                                         let obj = pod as *mut spa_sys::spa_pod_object;
                                         let body = &(*obj).body;
@@ -255,8 +252,6 @@ fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: 
                                             let value_ptr = &mut (*iter).value as *mut spa_sys::spa_pod;
                                             let type_ = (*value_ptr).type_;
                                             
-                                            // println!("Node {} Param Key: {}, Type: {}", id_clone, key, type_);
-
                                             // SPA_PROP_volume = 0x10003 (65539)
                                             // SPA_PROP_mute = 0x10004 (65540)
                                             // SPA_PROP_channelVolumes = 0x10008 (65544)
@@ -270,11 +265,9 @@ fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: 
                                                     if child_type == spa_sys::SPA_TYPE_Float {
                                                         let pod_size = (*array).pod.size;
                                                         let body_size = std::mem::size_of::<spa_sys::spa_pod_array_body>() as u32;
-                                                        // println!("  Array: pod_size={}, body_size={}", pod_size, body_size);
                                                         if pod_size > body_size {
                                                             let count = (pod_size - body_size) / 4;
                                                             channels = Some(count);
-                                                            println!("  Detected {} channels for node {}", count, id_clone);
                                                             
                                                             let data_ptr = (body_ptr as *const _ as *const u8).add(body_size as usize);
                                                             let f = *(data_ptr as *const f32);
@@ -321,7 +314,7 @@ fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: 
                     node.subscribe_params(&[spa::param::ParamType::Props, spa::param::ParamType::Route]);
 
                     nodes_global.borrow_mut().insert(id, NodeWrapper {
-                        proxy: node,
+                        _proxy: node,
                         _listener: Box::new(listener),
                     });
                 }
@@ -338,9 +331,6 @@ fn pw_thread(state: Arc<Mutex<AppState>>, rx: Receiver<PwCommand>, repaint_ctx: 
         })
         .register();
 
-    let nodes_cmd = nodes.clone();
-    let state_cmd = state.clone();
-    
     let timer = mainloop.loop_().add_timer(move |_count| {
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
