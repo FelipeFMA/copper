@@ -114,7 +114,7 @@ impl eframe::App for CopperApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Copper Mixer");
+            ui.heading("Copper");
             ui.add_space(10.0);
 
             ui.horizontal(|ui| {
