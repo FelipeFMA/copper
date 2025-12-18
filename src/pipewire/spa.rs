@@ -18,7 +18,15 @@ const ROUTE_KEY_SAVE: u32 = 13;
 
 // SPA object types
 const SPA_TYPE_OBJECT_PROPS: u32 = 262146;
+const SPA_TYPE_OBJECT_PARAM_PROFILE: u32 = 262152;
 const SPA_TYPE_OBJECT_PARAM_ROUTE: u32 = 262153;
+
+// Profile parameter keys
+const PROFILE_KEY_INDEX: u32 = 1;
+const PROFILE_KEY_NAME: u32 = 2;
+const PROFILE_KEY_DESCRIPTION: u32 = 3;
+const PROFILE_KEY_AVAILABLE: u32 = 5;
+const PROFILE_KEY_SAVE: u32 = 7;
 
 /// Parsed audio properties from a node or route.
 #[derive(Debug, Default)]
@@ -37,6 +45,14 @@ pub struct ParsedRoute {
     pub volume: Option<f32>,
     pub muted: Option<bool>,
     pub channel_count: Option<u32>,
+}
+
+/// Parsed profile information from a device.
+#[derive(Debug)]
+pub struct ParsedProfile {
+    pub index: u32,
+    pub description: String,
+    pub available: bool,
 }
 
 /// Read the first float value from a SPA float array, returning (value, count).
@@ -172,6 +188,85 @@ pub unsafe fn parse_route(pod: *const spa_sys::spa_pod) -> Option<ParsedRoute> {
         muted,
         channel_count,
     })
+}
+
+/// Parse profile information from a SPA Profile parameter POD.
+pub unsafe fn parse_profile(pod: *const spa_sys::spa_pod) -> Option<ParsedProfile> {
+    if unsafe { (*pod).type_ } != spa_sys::SPA_TYPE_Object {
+        return None;
+    }
+
+    let obj = pod as *mut spa_sys::spa_pod_object;
+    let body = unsafe { &(*obj).body };
+    let size = unsafe { (*obj).pod.size };
+    let mut iter = unsafe { spa_sys::spa_pod_prop_first(body) };
+
+    let mut index = None;
+    let mut description = None;
+    let mut available = true;
+
+    while unsafe { spa_sys::spa_pod_prop_is_inside(body, size, iter) } {
+        let key = unsafe { (*iter).key };
+        let value_ptr = unsafe { &mut (*iter).value as *mut spa_sys::spa_pod };
+
+        match key {
+            PROFILE_KEY_INDEX => {
+                let mut i: i32 = 0;
+                if unsafe { spa_sys::spa_pod_get_int(value_ptr, &mut i) } >= 0 {
+                    index = Some(i as u32);
+                }
+            }
+            PROFILE_KEY_NAME => {}
+            PROFILE_KEY_DESCRIPTION => {
+                let mut s: *const std::os::raw::c_char = std::ptr::null();
+                if unsafe { spa_sys::spa_pod_get_string(value_ptr, &mut s) } >= 0 {
+                    description = Some(unsafe { std::ffi::CStr::from_ptr(s).to_string_lossy().into_owned() });
+                }
+            }
+            PROFILE_KEY_AVAILABLE => {
+                let mut i: u32 = 0;
+                if unsafe { spa_sys::spa_pod_get_id(value_ptr, &mut i) } >= 0 {
+                    // 0 = No, 1 = Yes, 2 = Unknown
+                    available = i != 0;
+                }
+            }
+            _ => {}
+        }
+
+        iter = unsafe { spa_sys::spa_pod_prop_next(iter) };
+    }
+
+    Some(ParsedProfile {
+        index: index?,
+        description: description.unwrap_or_default(),
+        available,
+    })
+}
+
+/// Build a Profile parameter POD for setting device profile.
+pub fn build_profile_pod(index: u32) -> Option<Vec<u8>> {
+    let mut buf = Vec::with_capacity(128);
+    let mut builder = spa::pod::builder::Builder::new(&mut buf);
+
+    unsafe {
+        let mut frame: MaybeUninit<spa_sys::spa_pod_frame> = MaybeUninit::uninit();
+
+        builder
+            .push_object(&mut frame, SPA_TYPE_OBJECT_PARAM_PROFILE, spa::param::ParamType::Profile.as_raw())
+            .ok()?;
+
+        // Profile index
+        builder.add_prop(PROFILE_KEY_INDEX, 0).ok()?;
+        builder.add_int(index as i32).ok()?;
+
+        // Save = true
+        builder.add_prop(PROFILE_KEY_SAVE, 0).ok()?;
+        builder.add_bool(true).ok()?;
+
+        builder.pop(&mut frame.assume_init());
+    }
+
+    Some(buf)
 }
 
 /// Build a Route parameter POD for setting device volume.

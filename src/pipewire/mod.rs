@@ -131,7 +131,10 @@ fn handle_global_remove(
     metadata.borrow_mut().remove(&id);
 
     let mut s = state.lock();
-    if s.nodes.remove(&id).is_some() {
+    let mut changed = s.nodes.remove(&id).is_some();
+    changed |= s.cards.remove(&id).is_some();
+
+    if changed {
         request_repaint(repaint);
     }
 }
@@ -154,6 +157,22 @@ fn handle_device(
     let device_id = global.id;
     let device: pw::device::Device = registry.bind(global).expect("Failed to bind device");
 
+    let name = props.get("device.name").unwrap_or("Unknown").to_string();
+    let description = props.get("device.description").unwrap_or(&name).to_string();
+
+    {
+        let mut s = state.lock();
+        s.cards.insert(
+            device_id,
+            crate::state::Card {
+                id: device_id,
+                description,
+                profiles: Vec::new(),
+                active_profile_index: None,
+            },
+        );
+    }
+
     let state_clone = state.clone();
     let repaint_clone = repaint.clone();
 
@@ -164,7 +183,11 @@ fn handle_device(
         })
         .register();
 
-    device.subscribe_params(&[spa_lib::param::ParamType::Route]);
+    device.subscribe_params(&[
+        spa_lib::param::ParamType::Route,
+        spa_lib::param::ParamType::EnumProfile,
+        spa_lib::param::ParamType::Profile,
+    ]);
 
     devices.borrow_mut().insert(
         device_id,
@@ -182,15 +205,54 @@ fn on_device_param(
     state: &Arc<Mutex<AppState>>,
     repaint: &Arc<Mutex<Option<egui::Context>>>,
 ) {
-    if param_id != spa_lib::param::ParamType::Route {
-        return;
-    }
-
     let Some(param) = param else { return };
-    let Some(route) = (unsafe { spa::parse_route(param.as_raw_ptr()) }) else { return };
 
-    update_node_from_route(device_id, &route, state);
-    request_repaint(repaint);
+    match param_id {
+        spa_lib::param::ParamType::Route => {
+            if let Some(route) = unsafe { spa::parse_route(param.as_raw_ptr()) } {
+                update_node_from_route(device_id, &route, state);
+                request_repaint(repaint);
+            }
+        }
+        spa_lib::param::ParamType::EnumProfile => {
+            if let Some(profile) = unsafe { spa::parse_profile(param.as_raw_ptr()) } {
+                update_card_from_enum_profile(device_id, profile, state);
+                request_repaint(repaint);
+            }
+        }
+        spa_lib::param::ParamType::Profile => {
+            if let Some(profile) = unsafe { spa::parse_profile(param.as_raw_ptr()) } {
+                update_card_from_profile(device_id, profile, state);
+                request_repaint(repaint);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn update_card_from_enum_profile(device_id: u32, profile: spa::ParsedProfile, state: &Arc<Mutex<AppState>>) {
+    let mut s = state.lock();
+    if let Some(card) = s.cards.get_mut(&device_id) {
+        let p = crate::state::Profile {
+            index: profile.index,
+            description: profile.description,
+            available: profile.available,
+        };
+
+        if let Some(existing) = card.profiles.iter_mut().find(|p| p.index == profile.index) {
+            *existing = p;
+        } else {
+            card.profiles.push(p);
+            card.profiles.sort_by_key(|p| p.index);
+        }
+    }
+}
+
+fn update_card_from_profile(device_id: u32, profile: spa::ParsedProfile, state: &Arc<Mutex<AppState>>) {
+    let mut s = state.lock();
+    if let Some(card) = s.cards.get_mut(&device_id) {
+        card.active_profile_index = Some(profile.index);
+    }
 }
 
 fn update_node_from_route(device_id: u32, route: &spa::ParsedRoute, state: &Arc<Mutex<AppState>>) {
@@ -435,7 +497,19 @@ fn process_commands(rx: &Receiver<PwCommand>, state: &Arc<Mutex<AppState>>, node
             PwCommand::SetVolume(node_id, vol) => set_volume(node_id, vol, state, nodes, devices),
             PwCommand::SetMute(node_id, mute) => set_mute(node_id, mute, state, nodes, devices),
             PwCommand::SetDefault(node_id) => set_default(node_id, state, metadata),
+            PwCommand::SetCardProfile(card_id, profile_index) => set_card_profile(card_id, profile_index, devices),
         }
+    }
+}
+
+fn set_card_profile(card_id: u32, profile_index: u32, devices: &DeviceMap) {
+    let devices = devices.borrow();
+    let Some(device) = devices.get(&card_id) else { return };
+
+    if let Some(pod) = spa::build_profile_pod(profile_index) {
+        device.proxy.set_param(spa_lib::param::ParamType::Profile, 0, unsafe {
+            pipewire::spa::pod::Pod::from_raw(pod.as_ptr() as *const _)
+        });
     }
 }
 

@@ -16,6 +16,7 @@ enum Tab {
     Inputs,
     Playback,
     Recording,
+    Configuration,
 }
 
 impl CopperApp {
@@ -130,11 +131,12 @@ impl eframe::App for CopperApp {
                 ui.selectable_value(&mut self.current_tab, Tab::Inputs, "Inputs");
                 ui.selectable_value(&mut self.current_tab, Tab::Playback, "Playback");
                 ui.selectable_value(&mut self.current_tab, Tab::Recording, "Recording");
+                ui.selectable_value(&mut self.current_tab, Tab::Configuration, "Configuration");
             });
 
             ui.add_space(10.0);
 
-            let state = self.state.lock();
+            let mut state = self.state.lock();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -203,8 +205,71 @@ impl eframe::App for CopperApp {
                                 }
                             }
                         }
+                        Tab::Configuration => {
+                            let mut cards: Vec<&crate::state::Card> = state.cards.values().collect();
+                            cards.sort_by_key(|c| c.id);
+
+                            if cards.is_empty() {
+                                ui.label("No audio cards found");
+                            } else {
+                                for card in cards {
+                                    if state.hide_unavailable_profiles && card.profiles.iter().all(|p| !p.available) {
+                                        continue;
+                                    }
+                                    self.render_card(ui, card, &state);
+                                }
+                            }
+                        }
                     }
                 });
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.show_volume_meters, "Show volume meters");
+                ui.checkbox(&mut state.hide_unavailable_profiles, "Hide unavailable card profiles");
+            });
+        });
+    }
+}
+
+impl CopperApp {
+    fn render_card(&self, ui: &mut egui::Ui, card: &crate::state::Card, state: &AppState) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&card.description).strong());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Profile:");
+                    let current_profile_name = card
+                        .active_profile_index
+                        .and_then(|idx| card.profiles.iter().find(|p| p.index == idx))
+                        .map(|p| p.description.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+
+                    egui::ComboBox::from_id_salt(card.id)
+                        .selected_text(current_profile_name)
+                        .show_ui(ui, |ui| {
+                            for profile in &card.profiles {
+                                if state.hide_unavailable_profiles && !profile.available {
+                                    continue;
+                                }
+
+                                let mut label = profile.description.clone();
+                                if !profile.available {
+                                    label.push_str(" (unavailable)");
+                                }
+
+                                let is_selected = card.active_profile_index == Some(profile.index);
+                                if ui.selectable_label(is_selected, label).clicked() {
+                                    let _ = self.tx.send(PwCommand::SetCardProfile(card.id, profile.index));
+                                }
+                            }
+                        });
+                });
+            });
         });
     }
 }
