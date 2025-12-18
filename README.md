@@ -1,8 +1,9 @@
-# Copper
+<div align="center">
+  <h1>Copper</h1>
+  <img src="https://github.com/user-attachments/assets/12ec45e9-4224-44ff-9e00-762a23dcf7b2" width="700" />
+</div>
 
 Copper is a lightweight, minimalist PipeWire volume control application built with Rust and egui. It provides a clean and efficient interface for managing audio devices and streams on Linux, and is feature-complete compared to pavucontrol.
-
-
 
 ## Features
 
