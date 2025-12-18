@@ -73,29 +73,33 @@ impl eframe::App for CopperApp {
         let state = self.state.lock();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Copper Mixer");
-            ui.add_space(10.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading("Copper Mixer");
+                    ui.add_space(10.0);
 
-            let mut sinks: Vec<&AudioNode> = state.nodes.values().filter(|n| n.is_sink).collect();
-            let mut sources: Vec<&AudioNode> = state.nodes.values().filter(|n| !n.is_sink).collect();
+                let mut sinks: Vec<&AudioNode> = state.nodes.values().filter(|n| n.is_sink).collect();
+                let mut sources: Vec<&AudioNode> = state.nodes.values().filter(|n| !n.is_sink).collect();
 
-            sinks.sort_by_key(|n| n.id);
-            sources.sort_by_key(|n| n.id);
+                sinks.sort_by_key(|n| n.id);
+                sources.sort_by_key(|n| n.id);
 
-            if !sinks.is_empty() {
-                ui.label(egui::RichText::new("Outputs").strong());
-                for node in sinks {
-                    self.render_node(ui, node);
+                if !sinks.is_empty() {
+                    ui.label(egui::RichText::new("Outputs").strong());
+                    for node in sinks {
+                        self.render_node(ui, node);
+                    }
+                    ui.add_space(10.0);
                 }
-                ui.add_space(10.0);
-            }
 
-            if !sources.is_empty() {
-                ui.label(egui::RichText::new("Inputs").strong());
-                for node in sources {
-                    self.render_node(ui, node);
+                if !sources.is_empty() {
+                    ui.label(egui::RichText::new("Inputs").strong());
+                    for node in sources {
+                        self.render_node(ui, node);
+                    }
                 }
-            }
+            });
         });
     }
 }
