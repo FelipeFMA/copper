@@ -15,7 +15,13 @@ impl CopperApp {
     }
 
     fn render_node(&self, ui: &mut egui::Ui, node: &AudioNode) {
-        ui.group(|ui| {
+        let mut frame = egui::Frame::group(ui.style());
+        if node.is_default {
+            frame = frame.fill(ui.visuals().selection.bg_fill.linear_multiply(0.1));
+            frame = frame.stroke(egui::Stroke::new(1.0, ui.visuals().selection.bg_fill));
+        }
+
+        frame.show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.vertical(|ui| {
                 ui.add(
@@ -28,9 +34,18 @@ impl CopperApp {
                 ui.horizontal(|ui| {
                     let mut volume_percent = node.volume * 100.0;
                     let muted = node.muted;
+                    let is_default = node.is_default;
 
                     if ui.selectable_label(muted, "Mute").clicked() {
                         let _ = self.tx.send(PwCommand::SetMute(node.id, !muted));
+                    }
+
+                    if ui.selectable_label(is_default, "Default").clicked() {
+                        let _ = self.tx.send(PwCommand::SetDefault(node.id));
+                    }
+
+                    if is_default {
+                        ui.label(egui::RichText::new("(Default)").small().strong().color(ui.visuals().selection.bg_fill));
                     }
 
                     let slider = egui::Slider::new(&mut volume_percent, 0.0..=100.0)

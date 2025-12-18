@@ -24,8 +24,14 @@ struct DeviceWrapper {
     _listener: Box<dyn pw::proxy::Listener>,
 }
 
+struct MetadataWrapper {
+    proxy: pw::metadata::Metadata,
+    _listener: Box<dyn pw::proxy::Listener>,
+}
+
 type NodeMap = Rc<RefCell<HashMap<u32, NodeWrapper>>>;
 type DeviceMap = Rc<RefCell<HashMap<u32, DeviceWrapper>>>;
+type MetadataMap = Rc<RefCell<HashMap<u32, MetadataWrapper>>>;
 
 /// Main PipeWire thread entry point.
 pub fn run(
@@ -42,6 +48,7 @@ pub fn run(
 
     let nodes: NodeMap = Rc::new(RefCell::new(HashMap::new()));
     let devices: DeviceMap = Rc::new(RefCell::new(HashMap::new()));
+    let metadata: MetadataMap = Rc::new(RefCell::new(HashMap::new()));
 
     // Setup registry listener
     let _registry_listener = {
@@ -50,19 +57,21 @@ pub fn run(
         let repaint_add = repaint_ctx.clone();
         let nodes_add = nodes.clone();
         let devices_add = devices.clone();
+        let metadata_add = metadata.clone();
 
         let state_remove = state.clone();
         let repaint_remove = repaint_ctx.clone();
         let nodes_remove = nodes.clone();
         let devices_remove = devices.clone();
+        let metadata_remove = metadata.clone();
 
         registry
             .add_listener_local()
             .global(move |global| {
-                handle_global_add(global, &registry_clone, &state_add, &repaint_add, &nodes_add, &devices_add);
+                handle_global_add(global, &registry_clone, &state_add, &repaint_add, &nodes_add, &devices_add, &metadata_add);
             })
             .global_remove(move |id| {
-                handle_global_remove(id, &state_remove, &repaint_remove, &nodes_remove, &devices_remove);
+                handle_global_remove(id, &state_remove, &repaint_remove, &nodes_remove, &devices_remove, &metadata_remove);
             })
             .register()
     };
@@ -72,9 +81,10 @@ pub fn run(
         let rx = rx.clone();
         let state = state.clone();
         let devices = devices.clone();
+        let metadata = metadata.clone();
 
         mainloop.loop_().add_timer(move |_| {
-            process_commands(&rx, &state, &devices);
+            process_commands(&rx, &state, &devices, &metadata);
         })
     };
 
@@ -95,11 +105,14 @@ fn handle_global_add(
     repaint: &Arc<Mutex<Option<egui::Context>>>,
     nodes: &NodeMap,
     devices: &DeviceMap,
+    metadata: &MetadataMap,
 ) {
     let Some(props) = global.props else { return };
 
     if global.type_ == pw::types::ObjectType::Device {
         handle_device(global, props, registry, state, repaint, devices);
+    } else if global.type_ == pw::types::ObjectType::Metadata {
+        handle_metadata(global, props, registry, state, repaint, metadata);
     } else {
         handle_node(global, props, registry, state, repaint, nodes);
     }
@@ -111,9 +124,11 @@ fn handle_global_remove(
     repaint: &Arc<Mutex<Option<egui::Context>>>,
     nodes: &NodeMap,
     devices: &DeviceMap,
+    metadata: &MetadataMap,
 ) {
     nodes.borrow_mut().remove(&id);
     devices.borrow_mut().remove(&id);
+    metadata.borrow_mut().remove(&id);
 
     let mut s = state.lock();
     if s.nodes.remove(&id).is_some() {
@@ -207,6 +222,86 @@ fn update_node_from_route(device_id: u32, route: &spa::ParsedRoute, state: &Arc<
     }
 }
 
+// --- Metadata Handling ---
+
+fn handle_metadata(
+    global: &pw::registry::GlobalObject<&pw::spa::utils::dict::DictRef>,
+    props: &pw::spa::utils::dict::DictRef,
+    registry: &Rc<pw::registry::Registry>,
+    state: &Arc<Mutex<AppState>>,
+    repaint: &Arc<Mutex<Option<egui::Context>>>,
+    metadata: &MetadataMap,
+) {
+    let name = props.get("metadata.name").unwrap_or("");
+    if name != "default" {
+        return;
+    }
+
+    let id = global.id;
+    let proxy: pw::metadata::Metadata = registry.bind(global).expect("Failed to bind metadata");
+
+    let state_clone = state.clone();
+    let repaint_clone = repaint.clone();
+
+    let listener = proxy
+        .add_listener_local()
+        .property(move |subject, key, _type, value| {
+            if let Some(key) = key {
+                on_metadata_property(subject, key, value, &state_clone, &repaint_clone);
+            }
+            0
+        })
+        .register();
+
+    metadata.borrow_mut().insert(
+        id,
+        MetadataWrapper {
+            proxy,
+            _listener: Box::new(listener),
+        },
+    );
+}
+
+fn on_metadata_property(
+    _subject: u32,
+    key: &str,
+    value: Option<&str>,
+    state: &Arc<Mutex<AppState>>,
+    repaint: &Arc<Mutex<Option<egui::Context>>>,
+) {
+    if key != "default.audio.sink" && key != "default.audio.source" {
+        return;
+    }
+
+    let node_name = value.and_then(|v| {
+        if v.starts_with('{') {
+            // Simple JSON parsing for {"name": "..."}
+            v.split("\"name\":\"")
+                .nth(1)
+                .and_then(|s| s.split('\"').next())
+        } else {
+            Some(v)
+        }
+    });
+
+    let mut s = state.lock();
+    let is_sink = key == "default.audio.sink";
+
+    if is_sink {
+        s.default_sink_name = node_name.map(|n| n.to_string());
+    } else {
+        s.default_source_name = node_name.map(|n| n.to_string());
+    }
+
+    for node in s.nodes.values_mut() {
+        if node.is_sink == is_sink {
+            node.is_default = Some(node.name.as_str()) == node_name;
+        }
+    }
+
+    request_repaint(repaint);
+}
+
 // --- Node Handling ---
 
 fn handle_node(
@@ -230,6 +325,12 @@ fn handle_node(
 
     {
         let mut s = state.lock();
+        let is_default = if is_sink {
+            s.default_sink_name.as_ref() == Some(&name)
+        } else {
+            s.default_source_name.as_ref() == Some(&name)
+        };
+
         s.nodes.insert(
             id,
             AudioNode {
@@ -239,6 +340,7 @@ fn handle_node(
                 volume: 1.0,
                 muted: false,
                 is_sink,
+                is_default,
                 channel_count: 2,
                 device_id,
                 route_index: None,
@@ -305,14 +407,35 @@ fn on_node_param(
 
 // --- Command Processing ---
 
-fn process_commands(rx: &Receiver<PwCommand>, state: &Arc<Mutex<AppState>>, devices: &DeviceMap) {
+fn process_commands(rx: &Receiver<PwCommand>, state: &Arc<Mutex<AppState>>, devices: &DeviceMap, metadata: &MetadataMap) {
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             PwCommand::Quit => std::process::exit(0),
             PwCommand::SetVolume(node_id, vol) => set_volume(node_id, vol, state, devices),
             PwCommand::SetMute(node_id, mute) => set_mute(node_id, mute, state, devices),
+            PwCommand::SetDefault(node_id) => set_default(node_id, state, metadata),
         }
     }
+}
+
+fn set_default(node_id: u32, state: &Arc<Mutex<AppState>>, metadata: &MetadataMap) {
+    let (name, is_sink) = {
+        let s = state.lock();
+        let Some(node) = s.nodes.get(&node_id) else { return };
+        (node.name.clone(), node.is_sink)
+    };
+
+    let metadata = metadata.borrow();
+    let Some(wrapper) = metadata.values().next() else { return };
+
+    let key = if is_sink {
+        "default.audio.sink"
+    } else {
+        "default.audio.source"
+    };
+
+    let value = format!("{{\"name\": \"{}\"}}", name);
+    wrapper.proxy.set_property(0, key, Some("Spa:String:JSON"), Some(&value));
 }
 
 fn set_volume(node_id: u32, vol: f32, state: &Arc<Mutex<AppState>>, devices: &DeviceMap) {
