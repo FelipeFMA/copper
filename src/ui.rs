@@ -7,11 +7,23 @@ use std::sync::Arc;
 pub struct CopperApp {
     state: Arc<Mutex<AppState>>,
     tx: Sender<PwCommand>,
+    current_tab: Tab,
+}
+
+#[derive(PartialEq)]
+enum Tab {
+    Outputs,
+    Inputs,
+    Playback,
 }
 
 impl CopperApp {
     pub fn new(state: Arc<Mutex<AppState>>, tx: Sender<PwCommand>) -> Self {
-        Self { state, tx }
+        Self {
+            state,
+            tx,
+            current_tab: Tab::Outputs,
+        }
     }
 
     fn render_node(&self, ui: &mut egui::Ui, node: &AudioNode) {
@@ -70,36 +82,54 @@ impl eframe::App for CopperApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        let state = self.state.lock();
-
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Copper Mixer");
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.current_tab, Tab::Outputs, "Outputs");
+                ui.selectable_value(&mut self.current_tab, Tab::Inputs, "Inputs");
+                ui.selectable_value(&mut self.current_tab, Tab::Playback, "Playback");
+            });
+
+            ui.add_space(10.0);
+
+            let state = self.state.lock();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.heading("Copper Mixer");
-                    ui.add_space(10.0);
+                    match self.current_tab {
+                        Tab::Outputs => {
+                            let mut sinks: Vec<&AudioNode> =
+                                state.nodes.values().filter(|n| n.is_sink).collect();
+                            sinks.sort_by_key(|n| n.id);
 
-                let mut sinks: Vec<&AudioNode> = state.nodes.values().filter(|n| n.is_sink).collect();
-                let mut sources: Vec<&AudioNode> = state.nodes.values().filter(|n| !n.is_sink).collect();
+                            if sinks.is_empty() {
+                                ui.label("No output devices found");
+                            } else {
+                                for node in sinks {
+                                    self.render_node(ui, node);
+                                }
+                            }
+                        }
+                        Tab::Inputs => {
+                            let mut sources: Vec<&AudioNode> =
+                                state.nodes.values().filter(|n| !n.is_sink).collect();
+                            sources.sort_by_key(|n| n.id);
 
-                sinks.sort_by_key(|n| n.id);
-                sources.sort_by_key(|n| n.id);
-
-                if !sinks.is_empty() {
-                    ui.label(egui::RichText::new("Outputs").strong());
-                    for node in sinks {
-                        self.render_node(ui, node);
+                            if sources.is_empty() {
+                                ui.label("No input devices found");
+                            } else {
+                                for node in sources {
+                                    self.render_node(ui, node);
+                                }
+                            }
+                        }
+                        Tab::Playback => {
+                            ui.label("Playback tab - coming soon!");
+                        }
                     }
-                    ui.add_space(10.0);
-                }
-
-                if !sources.is_empty() {
-                    ui.label(egui::RichText::new("Inputs").strong());
-                    for node in sources {
-                        self.render_node(ui, node);
-                    }
-                }
-            });
+                });
         });
     }
 }
