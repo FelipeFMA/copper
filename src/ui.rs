@@ -89,15 +89,6 @@ impl CopperApp {
                         if ui.selectable_label(is_default, "Default").clicked() {
                             let _ = self.tx.send(PwCommand::SetDefault(node.id));
                         }
-
-                        if is_default {
-                            ui.label(
-                                egui::RichText::new("(Default)")
-                                    .small()
-                                    .strong()
-                                    .color(ui.visuals().selection.bg_fill),
-                            );
-                        }
                     }
 
                     let slider = egui::Slider::new(&mut volume_percent, 0.0..=100.0)
