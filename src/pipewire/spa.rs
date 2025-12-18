@@ -41,18 +41,18 @@ pub struct ParsedRoute {
 
 /// Read the first float value from a SPA float array, returning (value, count).
 unsafe fn read_float_array_first(pod: *mut spa_sys::spa_pod) -> Option<(f32, u32)> {
-    if (*pod).type_ != spa_sys::SPA_TYPE_Array {
+    if unsafe { (*pod).type_ } != spa_sys::SPA_TYPE_Array {
         return None;
     }
 
     let array = pod as *mut spa_sys::spa_pod_array;
-    let body = &(*array).body;
+    let body = unsafe { &(*array).body };
 
     if (*body).child.type_ != spa_sys::SPA_TYPE_Float {
         return None;
     }
 
-    let pod_size = (*array).pod.size;
+    let pod_size = unsafe { (*array).pod.size };
     let body_size = std::mem::size_of::<spa_sys::spa_pod_array_body>() as u32;
 
     if pod_size <= body_size {
@@ -60,8 +60,8 @@ unsafe fn read_float_array_first(pod: *mut spa_sys::spa_pod) -> Option<(f32, u32
     }
 
     let count = (pod_size - body_size) / 4;
-    let data_ptr = (body as *const _ as *const u8).add(body_size as usize);
-    let value = *(data_ptr as *const f32);
+    let data_ptr = unsafe { (body as *const _ as *const u8).add(body_size as usize) };
+    let value = unsafe { *(data_ptr as *const f32) };
 
     Some((value, count))
 }
@@ -70,42 +70,42 @@ unsafe fn read_float_array_first(pod: *mut spa_sys::spa_pod) -> Option<(f32, u32
 pub unsafe fn parse_props(pod: *mut spa_sys::spa_pod) -> ParsedProps {
     let mut result = ParsedProps::default();
 
-    if (*pod).type_ != spa_sys::SPA_TYPE_Object {
+    if unsafe { (*pod).type_ } != spa_sys::SPA_TYPE_Object {
         return result;
     }
 
     let obj = pod as *mut spa_sys::spa_pod_object;
-    let body = &(*obj).body;
-    let size = (*obj).pod.size;
-    let mut iter = spa_sys::spa_pod_prop_first(body);
+    let body = unsafe { &(*obj).body };
+    let size = unsafe { (*obj).pod.size };
+    let mut iter = unsafe { spa_sys::spa_pod_prop_first(body) };
 
-    while spa_sys::spa_pod_prop_is_inside(body, size, iter) {
-        let key = (*iter).key;
-        let value_ptr = &mut (*iter).value as *mut spa_sys::spa_pod;
+    while unsafe { spa_sys::spa_pod_prop_is_inside(body, size, iter) } {
+        let key = unsafe { (*iter).key };
+        let value_ptr = unsafe { &mut (*iter).value as *mut spa_sys::spa_pod };
 
         match key {
             SPA_PROP_CHANNEL_VOLUMES => {
-                if let Some((vol, count)) = read_float_array_first(value_ptr) {
+                if let Some((vol, count)) = unsafe { read_float_array_first(value_ptr) } {
                     result.volume = Some(vol);
                     result.channel_count = Some(count);
                 }
             }
             SPA_PROP_VOLUME if result.volume.is_none() => {
                 let mut f: f32 = 0.0;
-                if spa_sys::spa_pod_get_float(value_ptr, &mut f) >= 0 {
+                if unsafe { spa_sys::spa_pod_get_float(value_ptr, &mut f) } >= 0 {
                     result.volume = Some(f);
                 }
             }
             SPA_PROP_MUTE => {
                 let mut b: bool = false;
-                if spa_sys::spa_pod_get_bool(value_ptr, &mut b) >= 0 {
+                if unsafe { spa_sys::spa_pod_get_bool(value_ptr, &mut b) } >= 0 {
                     result.muted = Some(b);
                 }
             }
             _ => {}
         }
 
-        iter = spa_sys::spa_pod_prop_next(iter);
+        iter = unsafe { spa_sys::spa_pod_prop_next(iter) };
     }
 
     result
@@ -113,14 +113,14 @@ pub unsafe fn parse_props(pod: *mut spa_sys::spa_pod) -> ParsedProps {
 
 /// Parse route information from a SPA Route parameter POD.
 pub unsafe fn parse_route(pod: *const spa_sys::spa_pod) -> Option<ParsedRoute> {
-    if (*pod).type_ != spa_sys::SPA_TYPE_Object {
+    if unsafe { (*pod).type_ } != spa_sys::SPA_TYPE_Object {
         return None;
     }
 
     let obj = pod as *mut spa_sys::spa_pod_object;
-    let body = &(*obj).body;
-    let size = (*obj).pod.size;
-    let mut iter = spa_sys::spa_pod_prop_first(body);
+    let body = unsafe { &(*obj).body };
+    let size = unsafe { (*obj).pod.size };
+    let mut iter = unsafe { spa_sys::spa_pod_prop_first(body) };
 
     let mut route_index = None;
     let mut route_device = None;
@@ -129,31 +129,31 @@ pub unsafe fn parse_route(pod: *const spa_sys::spa_pod) -> Option<ParsedRoute> {
     let mut muted = None;
     let mut channel_count = None;
 
-    while spa_sys::spa_pod_prop_is_inside(body, size, iter) {
-        let key = (*iter).key;
-        let value_ptr = &mut (*iter).value as *mut spa_sys::spa_pod;
+    while unsafe { spa_sys::spa_pod_prop_is_inside(body, size, iter) } {
+        let key = unsafe { (*iter).key };
+        let value_ptr = unsafe { &mut (*iter).value as *mut spa_sys::spa_pod };
 
         match key {
             ROUTE_KEY_INDEX => {
                 let mut i: i32 = 0;
-                if spa_sys::spa_pod_get_int(value_ptr, &mut i) >= 0 {
+                if unsafe { spa_sys::spa_pod_get_int(value_ptr, &mut i) } >= 0 {
                     route_index = Some(i as u32);
                 }
             }
             ROUTE_KEY_DIRECTION => {
                 let mut i: u32 = 0;
-                if spa_sys::spa_pod_get_id(value_ptr, &mut i) >= 0 {
+                if unsafe { spa_sys::spa_pod_get_id(value_ptr, &mut i) } >= 0 {
                     direction = Some(i);
                 }
             }
             ROUTE_KEY_DEVICE => {
                 let mut i: i32 = 0;
-                if spa_sys::spa_pod_get_int(value_ptr, &mut i) >= 0 {
+                if unsafe { spa_sys::spa_pod_get_int(value_ptr, &mut i) } >= 0 {
                     route_device = Some(i as u32);
                 }
             }
             ROUTE_KEY_PROPS => {
-                let props = parse_props(value_ptr);
+                let props = unsafe { parse_props(value_ptr) };
                 volume = props.volume;
                 muted = props.muted;
                 channel_count = props.channel_count;
@@ -161,7 +161,7 @@ pub unsafe fn parse_route(pod: *const spa_sys::spa_pod) -> Option<ParsedRoute> {
             _ => {}
         }
 
-        iter = spa_sys::spa_pod_prop_next(iter);
+        iter = unsafe { spa_sys::spa_pod_prop_next(iter) };
     }
 
     Some(ParsedRoute {

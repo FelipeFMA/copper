@@ -41,10 +41,10 @@ pub fn run(
 ) {
     pw::init();
 
-    let mainloop = pw::main_loop::MainLoop::new(None).expect("Failed to create MainLoop");
-    let context = pw::context::Context::new(&mainloop).expect("Failed to create Context");
-    let core = context.connect(None).expect("Failed to connect to Core");
-    let registry = Rc::new(core.get_registry().expect("Failed to get Registry"));
+    let mainloop = pw::main_loop::MainLoopRc::new(None).expect("Failed to create MainLoop");
+    let context = pw::context::ContextRc::new(&mainloop, None).expect("Failed to create Context");
+    let core = context.connect_rc(None).expect("Failed to connect to Core");
+    let registry = core.get_registry_rc().expect("Failed to get Registry");
 
     let nodes: NodeMap = Rc::new(RefCell::new(HashMap::new()));
     let devices: DeviceMap = Rc::new(RefCell::new(HashMap::new()));
@@ -100,7 +100,7 @@ pub fn run(
 
 fn handle_global_add(
     global: &pw::registry::GlobalObject<&pw::spa::utils::dict::DictRef>,
-    registry: &Rc<pw::registry::Registry>,
+    registry: &pw::registry::RegistryRc,
     state: &Arc<Mutex<AppState>>,
     repaint: &Arc<Mutex<Option<egui::Context>>>,
     nodes: &NodeMap,
@@ -141,7 +141,7 @@ fn handle_global_remove(
 fn handle_device(
     global: &pw::registry::GlobalObject<&pw::spa::utils::dict::DictRef>,
     props: &pw::spa::utils::dict::DictRef,
-    registry: &Rc<pw::registry::Registry>,
+    registry: &pw::registry::RegistryRc,
     state: &Arc<Mutex<AppState>>,
     repaint: &Arc<Mutex<Option<egui::Context>>>,
     devices: &DeviceMap,
@@ -227,7 +227,7 @@ fn update_node_from_route(device_id: u32, route: &spa::ParsedRoute, state: &Arc<
 fn handle_metadata(
     global: &pw::registry::GlobalObject<&pw::spa::utils::dict::DictRef>,
     props: &pw::spa::utils::dict::DictRef,
-    registry: &Rc<pw::registry::Registry>,
+    registry: &pw::registry::RegistryRc,
     state: &Arc<Mutex<AppState>>,
     repaint: &Arc<Mutex<Option<egui::Context>>>,
     metadata: &MetadataMap,
@@ -307,7 +307,7 @@ fn on_metadata_property(
 fn handle_node(
     global: &pw::registry::GlobalObject<&pw::spa::utils::dict::DictRef>,
     props: &pw::spa::utils::dict::DictRef,
-    registry: &Rc<pw::registry::Registry>,
+    registry: &pw::registry::RegistryRc,
     state: &Arc<Mutex<AppState>>,
     repaint: &Arc<Mutex<Option<egui::Context>>>,
     nodes: &NodeMap,
