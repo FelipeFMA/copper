@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 struct NodeWrapper {
-    _proxy: pw::node::Node,
+    proxy: pw::node::Node,
     _listener: Box<dyn pw::proxy::Listener>,
 }
 
@@ -84,7 +84,7 @@ pub fn run(
         let metadata = metadata.clone();
 
         mainloop.loop_().add_timer(move |_| {
-            process_commands(&rx, &state, &devices, &metadata);
+            process_commands(&rx, &state, &nodes, &devices, &metadata);
         })
     };
 
@@ -313,22 +313,28 @@ fn handle_node(
     nodes: &NodeMap,
 ) {
     let media_class = props.get("media.class").unwrap_or("");
-    if media_class != "Audio/Sink" && media_class != "Audio/Source" {
+    let is_sink = media_class == "Audio/Sink";
+    let is_source = media_class == "Audio/Source";
+    let is_playback = media_class == "Stream/Output/Audio";
+    let is_recording = media_class == "Stream/Input/Audio";
+
+    if !is_sink && !is_source && !is_playback && !is_recording {
         return;
     }
 
     let id = global.id;
     let name = props.get("node.name").unwrap_or("Unknown").to_string();
     let description = props.get("node.description").unwrap_or(&name).to_string();
-    let is_sink = media_class == "Audio/Sink";
     let device_id = props.get("device.id").and_then(|s| s.parse::<u32>().ok());
 
     {
         let mut s = state.lock();
         let is_default = if is_sink {
             s.default_sink_name.as_ref() == Some(&name)
-        } else {
+        } else if is_source {
             s.default_source_name.as_ref() == Some(&name)
+        } else {
+            false
         };
 
         s.nodes.insert(
@@ -339,7 +345,8 @@ fn handle_node(
                 description,
                 volume: 1.0,
                 muted: false,
-                is_sink,
+                is_sink: is_sink || is_playback,
+                is_stream: is_playback || is_recording,
                 is_default,
                 channel_count: 2,
                 device_id,
@@ -368,7 +375,7 @@ fn handle_node(
     nodes.borrow_mut().insert(
         id,
         NodeWrapper {
-            _proxy: node,
+            proxy: node,
             _listener: Box::new(listener),
         },
     );
@@ -407,12 +414,12 @@ fn on_node_param(
 
 // --- Command Processing ---
 
-fn process_commands(rx: &Receiver<PwCommand>, state: &Arc<Mutex<AppState>>, devices: &DeviceMap, metadata: &MetadataMap) {
+fn process_commands(rx: &Receiver<PwCommand>, state: &Arc<Mutex<AppState>>, nodes: &NodeMap, devices: &DeviceMap, metadata: &MetadataMap) {
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             PwCommand::Quit => std::process::exit(0),
-            PwCommand::SetVolume(node_id, vol) => set_volume(node_id, vol, state, devices),
-            PwCommand::SetMute(node_id, mute) => set_mute(node_id, mute, state, devices),
+            PwCommand::SetVolume(node_id, vol) => set_volume(node_id, vol, state, nodes, devices),
+            PwCommand::SetMute(node_id, mute) => set_mute(node_id, mute, state, nodes, devices),
             PwCommand::SetDefault(node_id) => set_default(node_id, state, metadata),
         }
     }
@@ -438,47 +445,59 @@ fn set_default(node_id: u32, state: &Arc<Mutex<AppState>>, metadata: &MetadataMa
     wrapper.proxy.set_property(0, key, Some("Spa:String:JSON"), Some(&value));
 }
 
-fn set_volume(node_id: u32, vol: f32, state: &Arc<Mutex<AppState>>, devices: &DeviceMap) {
-    let info = {
+fn set_volume(node_id: u32, vol: f32, state: &Arc<Mutex<AppState>>, nodes: &NodeMap, devices: &DeviceMap) {
+    let (is_stream, channel_count, device_id, route_index, route_device) = {
         let s = state.lock();
-        s.nodes.get(&node_id).and_then(|n| {
-            Some((n.device_id?, n.route_index?, n.route_device?, n.channel_count))
-        })
+        let Some(node) = s.nodes.get(&node_id) else { return };
+        (node.is_stream, node.channel_count, node.device_id, node.route_index, node.route_device)
     };
 
-    let Some((device_id, route_index, route_device, channel_count)) = info else { return };
+    if is_stream {
+        let nodes = nodes.borrow();
+        let Some(wrapper) = nodes.get(&node_id) else { return };
+        if let Some(buf) = spa::build_props_volume_pod(channel_count, vol, None) {
+            if let Some(pod) = spa_lib::pod::Pod::from_bytes(&buf) {
+                wrapper.proxy.set_param(spa_lib::param::ParamType::Props, 0, pod);
+            }
+        }
+    } else {
+        let (Some(device_id), Some(route_index), Some(route_device)) = (device_id, route_index, route_device) else { return };
+        let devices = devices.borrow();
+        let Some(wrapper) = devices.get(&device_id) else { return };
 
-    let devices = devices.borrow();
-    let Some(wrapper) = devices.get(&device_id) else { return };
-
-    let Some(buf) = spa::build_route_volume_pod(route_index, route_device, channel_count, vol, None) else {
-        return;
-    };
-
-    if let Some(pod) = spa_lib::pod::Pod::from_bytes(&buf) {
-        wrapper.proxy.set_param(spa_lib::param::ParamType::Route, 0, pod);
+        if let Some(buf) = spa::build_route_volume_pod(route_index, route_device, channel_count, vol, None) {
+            if let Some(pod) = spa_lib::pod::Pod::from_bytes(&buf) {
+                wrapper.proxy.set_param(spa_lib::param::ParamType::Route, 0, pod);
+            }
+        }
     }
 }
 
-fn set_mute(node_id: u32, mute: bool, state: &Arc<Mutex<AppState>>, devices: &DeviceMap) {
-    let info = {
+fn set_mute(node_id: u32, mute: bool, state: &Arc<Mutex<AppState>>, nodes: &NodeMap, devices: &DeviceMap) {
+    let (is_stream, channel_count, volume, device_id, route_index, route_device) = {
         let s = state.lock();
-        s.nodes.get(&node_id).and_then(|n| {
-            Some((n.device_id?, n.route_index?, n.route_device?, n.channel_count, n.volume))
-        })
+        let Some(node) = s.nodes.get(&node_id) else { return };
+        (node.is_stream, node.channel_count, node.volume, node.device_id, node.route_index, node.route_device)
     };
 
-    let Some((device_id, route_index, route_device, channel_count, volume)) = info else { return };
+    if is_stream {
+        let nodes = nodes.borrow();
+        let Some(wrapper) = nodes.get(&node_id) else { return };
+        if let Some(buf) = spa::build_props_volume_pod(channel_count, volume, Some(mute)) {
+            if let Some(pod) = spa_lib::pod::Pod::from_bytes(&buf) {
+                wrapper.proxy.set_param(spa_lib::param::ParamType::Props, 0, pod);
+            }
+        }
+    } else {
+        let (Some(device_id), Some(route_index), Some(route_device)) = (device_id, route_index, route_device) else { return };
+        let devices = devices.borrow();
+        let Some(wrapper) = devices.get(&device_id) else { return };
 
-    let devices = devices.borrow();
-    let Some(wrapper) = devices.get(&device_id) else { return };
-
-    let Some(buf) = spa::build_route_volume_pod(route_index, route_device, channel_count, volume, Some(mute)) else {
-        return;
-    };
-
-    if let Some(pod) = spa_lib::pod::Pod::from_bytes(&buf) {
-        wrapper.proxy.set_param(spa_lib::param::ParamType::Route, 0, pod);
+        if let Some(buf) = spa::build_route_volume_pod(route_index, route_device, channel_count, volume, Some(mute)) {
+            if let Some(pod) = spa_lib::pod::Pod::from_bytes(&buf) {
+                wrapper.proxy.set_param(spa_lib::param::ParamType::Route, 0, pod);
+            }
+        }
     }
 }
 

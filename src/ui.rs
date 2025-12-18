@@ -52,12 +52,19 @@ impl CopperApp {
                         let _ = self.tx.send(PwCommand::SetMute(node.id, !muted));
                     }
 
-                    if ui.selectable_label(is_default, "Default").clicked() {
-                        let _ = self.tx.send(PwCommand::SetDefault(node.id));
-                    }
+                    if !node.is_stream {
+                        if ui.selectable_label(is_default, "Default").clicked() {
+                            let _ = self.tx.send(PwCommand::SetDefault(node.id));
+                        }
 
-                    if is_default {
-                        ui.label(egui::RichText::new("(Default)").small().strong().color(ui.visuals().selection.bg_fill));
+                        if is_default {
+                            ui.label(
+                                egui::RichText::new("(Default)")
+                                    .small()
+                                    .strong()
+                                    .color(ui.visuals().selection.bg_fill),
+                            );
+                        }
                     }
 
                     let slider = egui::Slider::new(&mut volume_percent, 0.0..=100.0)
@@ -100,8 +107,11 @@ impl eframe::App for CopperApp {
                 .show(ui, |ui| {
                     match self.current_tab {
                         Tab::Outputs => {
-                            let mut sinks: Vec<&AudioNode> =
-                                state.nodes.values().filter(|n| n.is_sink).collect();
+                            let mut sinks: Vec<&AudioNode> = state
+                                .nodes
+                                .values()
+                                .filter(|n| n.is_sink && !n.is_stream)
+                                .collect();
                             sinks.sort_by_key(|n| n.id);
 
                             if sinks.is_empty() {
@@ -113,8 +123,11 @@ impl eframe::App for CopperApp {
                             }
                         }
                         Tab::Inputs => {
-                            let mut sources: Vec<&AudioNode> =
-                                state.nodes.values().filter(|n| !n.is_sink).collect();
+                            let mut sources: Vec<&AudioNode> = state
+                                .nodes
+                                .values()
+                                .filter(|n| !n.is_sink && !n.is_stream)
+                                .collect();
                             sources.sort_by_key(|n| n.id);
 
                             if sources.is_empty() {
@@ -126,7 +139,20 @@ impl eframe::App for CopperApp {
                             }
                         }
                         Tab::Playback => {
-                            ui.label("Playback tab - coming soon!");
+                            let mut playback: Vec<&AudioNode> = state
+                                .nodes
+                                .values()
+                                .filter(|n| n.is_stream && n.is_sink)
+                                .collect();
+                            playback.sort_by_key(|n| n.id);
+
+                            if playback.is_empty() {
+                                ui.label("No playback streams found");
+                            } else {
+                                for node in playback {
+                                    self.render_node(ui, node);
+                                }
+                            }
                         }
                     }
                 });

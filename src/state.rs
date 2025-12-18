@@ -8,6 +8,7 @@ pub struct AudioNode {
     pub volume: f32,
     pub muted: bool,
     pub is_sink: bool,
+    pub is_stream: bool,
     pub is_default: bool,
     pub channel_count: u32,
     pub device_id: Option<u32>,

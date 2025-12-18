@@ -239,3 +239,45 @@ pub fn build_route_volume_pod(
 
     Some(buf)
 }
+
+/// Build a Props parameter POD for setting node volume.
+pub fn build_props_volume_pod(
+    channel_count: u32,
+    volume: f32,
+    mute: Option<bool>,
+) -> Option<Vec<u8>> {
+    let vol_linear = volume.powi(3);
+    let channels = channel_count.max(2) as usize;
+
+    let mut buf = Vec::with_capacity(512);
+    let mut builder = spa::pod::builder::Builder::new(&mut buf);
+
+    unsafe {
+        let mut frame: MaybeUninit<spa_sys::spa_pod_frame> = MaybeUninit::uninit();
+
+        builder
+            .push_object(&mut frame, SPA_TYPE_OBJECT_PROPS, spa::param::ParamType::Props.as_raw())
+            .ok()?;
+
+        // Channel volumes
+        builder.add_prop(SPA_PROP_CHANNEL_VOLUMES, 0).ok()?;
+        let floats: Vec<f32> = vec![vol_linear; channels];
+        spa_sys::spa_pod_builder_array(
+            builder.as_raw() as *const _ as *mut _,
+            4,
+            spa_sys::SPA_TYPE_Float,
+            floats.len() as u32,
+            floats.as_ptr() as *const std::ffi::c_void,
+        );
+
+        // Mute (optional)
+        if let Some(m) = mute {
+            builder.add_prop(SPA_PROP_MUTE, 0).ok()?;
+            builder.add_bool(m).ok()?;
+        }
+
+        builder.pop(&mut frame.assume_init());
+    }
+
+    Some(buf)
+}
