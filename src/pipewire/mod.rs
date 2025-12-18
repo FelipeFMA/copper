@@ -324,7 +324,16 @@ fn handle_node(
 
     let id = global.id;
     let name = props.get("node.name").unwrap_or("Unknown").to_string();
-    let description = props.get("node.description").unwrap_or(&name).to_string();
+    let mut description = props.get("node.description").unwrap_or(&name).to_string();
+
+    if is_playback || is_recording {
+        if let Some(app_name) = props.get("application.name") {
+            if !description.contains(app_name) {
+                description = format!("{}: {}", app_name, description);
+            }
+        }
+    }
+
     let device_id = props.get("device.id").and_then(|s| s.parse::<u32>().ok());
 
     {
@@ -348,8 +357,13 @@ fn handle_node(
                 is_sink: is_sink || is_playback,
                 is_stream: is_playback || is_recording,
                 is_default,
+                media_class: media_class.to_string(),
                 channel_count: 2,
                 device_id,
+                target_id: props
+                    .get("target.node")
+                    .or_else(|| props.get("node.target"))
+                    .and_then(|s| s.parse::<u32>().ok()),
                 route_index: None,
                 route_device: None,
             },

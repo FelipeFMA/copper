@@ -10,8 +10,10 @@ pub struct AudioNode {
     pub is_sink: bool,
     pub is_stream: bool,
     pub is_default: bool,
+    pub media_class: String,
     pub channel_count: u32,
     pub device_id: Option<u32>,
+    pub target_id: Option<u32>,
     pub route_index: Option<u32>,
     pub route_device: Option<u32>,
 }

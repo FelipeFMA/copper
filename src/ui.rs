@@ -15,6 +15,7 @@ enum Tab {
     Outputs,
     Inputs,
     Playback,
+    Recording,
 }
 
 impl CopperApp {
@@ -26,7 +27,7 @@ impl CopperApp {
         }
     }
 
-    fn render_node(&self, ui: &mut egui::Ui, node: &AudioNode) {
+    fn render_node(&self, ui: &mut egui::Ui, node: &AudioNode, state: &AppState) {
         let mut frame = egui::Frame::group(ui.style());
         if node.is_default {
             frame = frame.fill(ui.visuals().selection.bg_fill.linear_multiply(0.1));
@@ -36,9 +37,40 @@ impl CopperApp {
         frame.show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.vertical(|ui| {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&node.description).strong()).truncate(),
-                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&node.description).strong()).truncate(),
+                    );
+
+                    if node.is_stream {
+                        let target_node = if let Some(target_id) = node.target_id {
+                            state.nodes.get(&target_id)
+                        } else {
+                            // If no target_id, try to find the default node
+                            let default_name = if node.is_sink {
+                                state.default_sink_name.as_ref()
+                            } else {
+                                state.default_source_name.as_ref()
+                            };
+
+                            default_name.and_then(|name| {
+                                state.nodes.values().find(|n| n.name == *name)
+                            })
+                        };
+
+                        if let Some(target) = target_node {
+                            let prefix = if node.is_sink {
+                                "on"
+                            } else if target.media_class == "Audio/Sink" {
+                                "from Monitor of"
+                            } else {
+                                "from"
+                            };
+                            ui.label(egui::RichText::new(format!(" {} {}", prefix, target.description)).small().weak());
+                        }
+                    }
+                });
+
                 ui.add(
                     egui::Label::new(egui::RichText::new(&node.name).small().weak()).truncate(),
                 );
@@ -97,6 +129,7 @@ impl eframe::App for CopperApp {
                 ui.selectable_value(&mut self.current_tab, Tab::Outputs, "Outputs");
                 ui.selectable_value(&mut self.current_tab, Tab::Inputs, "Inputs");
                 ui.selectable_value(&mut self.current_tab, Tab::Playback, "Playback");
+                ui.selectable_value(&mut self.current_tab, Tab::Recording, "Recording");
             });
 
             ui.add_space(10.0);
@@ -118,7 +151,7 @@ impl eframe::App for CopperApp {
                                 ui.label("No output devices found");
                             } else {
                                 for node in sinks {
-                                    self.render_node(ui, node);
+                                    self.render_node(ui, node, &state);
                                 }
                             }
                         }
@@ -134,7 +167,7 @@ impl eframe::App for CopperApp {
                                 ui.label("No input devices found");
                             } else {
                                 for node in sources {
-                                    self.render_node(ui, node);
+                                    self.render_node(ui, node, &state);
                                 }
                             }
                         }
@@ -150,7 +183,23 @@ impl eframe::App for CopperApp {
                                 ui.label("No playback streams found");
                             } else {
                                 for node in playback {
-                                    self.render_node(ui, node);
+                                    self.render_node(ui, node, &state);
+                                }
+                            }
+                        }
+                        Tab::Recording => {
+                            let mut recording: Vec<&AudioNode> = state
+                                .nodes
+                                .values()
+                                .filter(|n| n.is_stream && !n.is_sink)
+                                .collect();
+                            recording.sort_by_key(|n| n.id);
+
+                            if recording.is_empty() {
+                                ui.label("No recording streams found");
+                            } else {
+                                for node in recording {
+                                    self.render_node(ui, node, &state);
                                 }
                             }
                         }
